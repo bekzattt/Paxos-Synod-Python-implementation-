@@ -1,4 +1,3 @@
-from scipy.weave.size_check import func
 
 __author__ = 'bekzat'
 import pika
@@ -19,41 +18,33 @@ parameters = pika.ConnectionParameters(
 
 heartBeatDelay = 2
 messageDelay = 2
-N = 3
+N = 5
 
 class PaxNode(object):
     def __init__(self, node_id):
-
-
         self.node_id = node_id # uniq id of node in range 1..5
 
-        # uncomment to create a blank files
-        # self.lastTried = 0
-        # self.maxBallot = 0
-        # self.prevVote = 0
-        # self.prevBallot = 0
-        #
-        # self.updateLastTried();
-        # self.updateMaxBallot();
-        # self.updatePrevVote();
-        # self.updatePrevBallot();
+
+        #TODO: HERE IS HOW MANY QUESTION IN TO DECIDE FOR PARLAMENT
+        self.countTotalDecrees = 100
+
+        self.wasLeader = False
+        self.ballotLeader = 0 # id of current ballot leader
+        self.ballotParticipants = [] # temporary for the last ballot
+        self.ballotDecreeConfirmers = [] # temporary for the last ballot
 
         self.lastTried = self.getLastTried() # last tried ballot, parameter of leader
-        self.wasLeader = False
-
-        self.ballotLeader = 0 # id of current ballot leader
-        self.ballotParticipants = []
-        self.ballotDecreeConfirmers = []
-
         self.maxBallot = self.getMaxBallot()
-        self.prevVote = self.getPrevVote()
-        self.prevBallot = self.getPrevBallot()
+
+        self.lastAcceptedDecree = self.getLastAcceptedDecree()
+        self.decreesList = self.getDecreesList()# inside dict["prev_ballot":"x","prev_vote":"y"]
 
         print "node restored with: "
         print "last_tried = " + str(self.lastTried)
         print "max_ballot = " + str(self.maxBallot)
-        print "prev_vote = " + str(self.prevVote)
-        print "prev_ballot = " + str(self.prevBallot)
+        print "last_accepted_decree = " + str(self.lastAcceptedDecree)
+        print "decrees_list = " + str(self.decreesList)
+
 
         self.lastTimeHeartBeat = 0
         self.lastTimeCurRound = 0
@@ -65,7 +56,7 @@ class PaxNode(object):
         channel.queue_declare(queue='last_vote' + str(node_id))
         channel.queue_declare(queue='begin_ballot' + str(node_id))
         channel.queue_declare(queue='voted' + str(node_id))
-        channel.queue_declare(queue='success' + str(node_id))
+        # channel.queue_declare(queue='success' + str(node_id))
         channel.queue_declare(queue='heart_beat' + str(node_id))
 
         channel.basic_consume(self.next_ballot_callback, queue='next_ballot' + str(node_id), no_ack=True)
@@ -86,19 +77,38 @@ class PaxNode(object):
         fin  = open(str(self.node_id)+"_last_tried.txt"); x = map(int, fin.readline().split()); fin.close(); return x[0];
     def getMaxBallot(self):
         fin  = open(str(self.node_id)+"_max_ballot.txt"); x = map(int, fin.readline().split()); fin.close();return x[0];
-    def getPrevVote(self):
-        fin  = open(str(self.node_id)+"_prev_vote.txt"); x = map(int, fin.readline().split()); fin.close(); return x[0];
-    def getPrevBallot(self):
-        fin  = open(str(self.node_id)+"_prev_ballot.txt"); x = map(int, fin.readline().split()); fin.close(); return x[0];
+
+    def getLastAcceptedDecree(self):
+        fin  = open(str(self.node_id)+"_last_accepted_vote.txt");  x = map(int, fin.readline().split()); fin.close(); return x[0];
+    def getDecreesList(self):
+        fin  = open(str(self.node_id)+"_decrees_list.txt");
+        decrees_list = []
+        for i in xrange(0,self.lastAcceptedDecree):
+            x,y = map(int, fin.readline().split());
+            data = {"prev_ballot":int(x),"prev_vote":int(y)}
+            decrees_list.append(data)
+        fin.close();
+        return decrees_list;
+
 # WRITE VARIABLES TO DATASOURCE - LOCAL FILE SYSTEM
     def updateLastTried(self):
         fout  = open(str(self.node_id)+"_last_tried.txt","w"); fout.write(str(self.lastTried)); fout.close();
     def updateMaxBallot(self):
         fout  = open(str(self.node_id)+"_max_ballot.txt","w"); fout.write(str(self.maxBallot)); fout.close();
-    def updatePrevVote(self):
-        fout  = open(str(self.node_id)+"_prev_vote.txt","w"); fout.write(str(self.prevVote)); fout.close();
-    def updatePrevBallot(self):
-        fout  = open(str(self.node_id)+"_prev_ballot.txt","w"); fout.write(str(self.prevBallot)); fout.close();
+
+    def updateLastAcceptedDecree(self):
+        fout  = open(str(self.node_id)+"_last_accepted_vote.txt","w"); fout.write(str(self.lastAcceptedDecree)); fout.close();
+
+    def updateDecreesList(self):
+        fout  = open(str(self.node_id)+"_decrees_list.txt","w");
+
+        if len(self.decreesList) != self.lastAcceptedDecree:
+            print "ERROR!!!!!! COUNT OF DECREES != LAST ACCEPTED DECREE"
+            return
+
+        for data in self.decreesList:
+            fout.write(str(data["prev_ballot"])+" "+str(data["prev_vote"])+"\n");
+        fout.close();
 
 # heartbeat
     def heart_beat_pinger(self):
@@ -139,6 +149,7 @@ class PaxNode(object):
 #   probability to fail
     def shouldFail(self):
         return
+        # TODO: create failure enviroment
         # if(randint(1,11) < 2):# small chance of failure
         #     print "Sleep of failure"+str(self.node_id)+" = 3 sec"
         #     time.sleep(3)
@@ -152,7 +163,7 @@ class PaxNode(object):
         self.lastTimeCurRound = currentTime
         b = currentTime * 100 + self.node_id
         #self.lastTried + self.node_id # temporarily
-        data = {'leader_id': self.node_id ,'b': int(b)}
+        data = {'leader_id': self.node_id ,'b': int(b),"leader_n":self.lastAcceptedDecree}
         self.lastTried = b
         self.updateLastTried()
         self.ballotParticipants = list()
@@ -169,17 +180,31 @@ class PaxNode(object):
         if b < self.maxBallot:
             print 'ballot will be ignoreed #' + str(b) + " <  maxBallot " + str(self.maxBallot)
             return
+        leader_n = int(data['leader_n'])
         self.ballotLeader = int(data['leader_id'])
         self.maxBallot = b
         self.updateMaxBallot()
         print "new max_ballot = " + str(self.maxBallot)
-        self.last_vote(b,self.prevVote,self.prevBallot)
+        self.last_vote(b,leader_n)
 # 2
-    def last_vote(self,b,prevVote,prevBallot):# on participant
+    def last_vote(self,b,leader_n):# on participant
         print "last_vote"
+
+        # ,self.prevVote,self.prevBallot
+
+        decrees_to_send = []
+        if(self.lastAcceptedDecree > leader_n):
+            for i in xrange(leader_n,self.lastAcceptedDecree):
+                item = self.decreesList[i]
+                decrees_to_send.append(item)
+
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
-        data = {'b': int(b),"participant_id":self.node_id,"prevVote":prevVote,"prevBallot":prevBallot}
+        data = {'b': int(b),
+                "participant_id":self.node_id,
+                "participant_m":self.lastAcceptedDecree,
+                "decrees_list":decrees_to_send}
+
         channel.basic_publish(exchange='', routing_key='last_vote'+str(self.ballotLeader),body=json.dumps(data))
         connection.close()
 
@@ -194,7 +219,11 @@ class PaxNode(object):
         if currentTime - self.lastTimeCurRound > 2*messageDelay*1000:
             print "Last_vote - message delayed"
             return
+
+        participant_m = int(data['participant_m'])
         participantId = int(data['participant_id'])
+        participant_decrees = data['decrees_list']
+
         self.ballotParticipants.append(data);
 
 # LEADER chooses right answers
@@ -205,25 +234,62 @@ class PaxNode(object):
             self.wasLeader = False # start new ballot on next iteration
             return;
 
-        currentDecree = -1
-        tmpPrevBallot = -1
-
+        # self.decreesList[ 0 .. self.lastAcceptedDecree]
+        max_m = 0
         for data in self.ballotParticipants:
-            prevVote = int(data['prevVote'])
-            prevBallot = int(data['prevBallot'])
-            if prevVote == 0: continue
-            if prevBallot > tmpPrevBallot:
-                currentDecree = prevVote
-        # none of participant knows any previous vote, we need to generate new one
-        if currentDecree == -1:
-            currentDecree = randint(1,2) # 1 - alpha , 2 - betta
 
-        print "I have a quorum of"+str(len(self.ballotParticipants)) + " decree = " + str(currentDecree)
-        self.begin_ballot(self.lastTried,currentDecree)
+            b = int(data['b'])
+            if b != self.lastTried:
+                print "calculate decrees : ballot != last_tried"
+                return
+
+            participantId = int(data['participant_id'])
+            participant_m = int(data['participant_m'])
+            if max_m < participant_m:
+                max_m = participant_m
+
+        for i in xrange(0,max_m):
+            if(len(self.decreesList) < max_m):
+                data = {"prev_ballot":int(0),"prev_vote":int(0)}
+                self.decreesList.append(data)
+
+        n = self.lastAcceptedDecree
+        for data in self.ballotParticipants:
+            participantId = int(data['participant_id'])
+            participant_m = int(data['participant_m'])
+            participant_decrees = data['decrees_list']
+
+            for i in xrange(0,len(participant_decrees)):
+                item = participant_decrees[i]
+                prevVote = int(item['prev_vote'])
+                prevBallot = int(item['prev_ballot'])
+                ith = n + i
+
+                currentItem = self.decreesList[ith]
+                if prevVote == 0: continue
+                if prevBallot > currentItem['prev_ballot']:
+                    currentItem['prev_vote'] = prevVote
+
+        print "old n = "+ str(n) + "  new learned n =  "+ str(self.lastAcceptedDecree)
+
+
+        if(len(self.decreesList) + 1 > self.countTotalDecrees):
+            print "WE HAVE SOLVED ALL PROBLEMS !!!"
+            return
+
+        # TODO: Master makes here decision!!!
+        newDecree = randint(1,2) # 1 - alpha , 2 - betta
+        data = {"prev_ballot":int(self.lastTried),
+                "prev_vote":int(newDecree)}
+        self.decreesList.append(data)
+        self.lastAcceptedDecree = len(self.decreesList);
+
+        print "I have a quorum of"+str(len(self.ballotParticipants)) + " made new decree = " + str(newDecree)+"  for  Q:" + str(len(self.decreesList))
+        self.begin_ballot(self.lastTried)
 
 # 3
-    def begin_ballot(self,b,vote):#on leader
-        print "begin_ballot" + str(b % 1000) + " vote :" + str(vote)
+    def begin_ballot(self,b):#on leader
+        print "begin_ballot" + str(b % 1000) + " decrees_list :" + str(self.decreesList)
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
         self.ballotDecreeConfirmers = list()
@@ -231,7 +297,7 @@ class PaxNode(object):
         currentTime = int(round(time.time() * 1000))
         self.lastTimeDecreeVotedCurRound = currentTime
 
-        data = {'leader_id': self.node_id ,'b': int(b), 'v': str(vote)}
+        data = {'leader_id': self.node_id ,'b': int(b), 'decrees_list': self.decreesList}
         for data_i in self.ballotParticipants:
             participantId = int(data_i['participant_id'])
             channel.basic_publish(exchange='', routing_key='begin_ballot'+str(participantId),body=json.dumps(data))
@@ -247,14 +313,16 @@ class PaxNode(object):
             print 'ballot != maxBallot' + str(b)
             return
         # print "data" + str(data)
-        vote = int(data['v'])
-        self.prevVote = vote # update new vote
-        self.prevBallot = self.maxBallot
 
-        self.updatePrevBallot()
-        self.updatePrevVote()
+        from_leader_decrees = data['decrees_list']
+        self.decreesList = from_leader_decrees
+        self.lastAcceptedDecree = len(self.decreesList)
 
-        print "FOR BALLOT #" + str(b % 1000) + " ON NODE #" + str(self.node_id)+  " VOTE  : " + str(vote)+" !!!"
+        self.updateLastAcceptedDecree()
+        self.updateDecreesList()
+
+        print "FOR BALLOT #" + str(b % 1000) + " ON NODE #" + str(self.node_id)+  " VOTE  : " +\
+              str(from_leader_decrees[len(from_leader_decrees)-1]) +" !!!"
         self.voted(b)
 
     def voted(self,b):#on participant
@@ -290,3 +358,7 @@ class PaxNode(object):
             if b != self.lastTried: return
             participantId = int(data['participant_id'])
             print " PARTICIPANT #"+str(participantId)+" VOTED IN BALLOT #"+ str(b)
+
+        # TODO: modification for Multi-Paxos
+        # continue without next ballots here with a stable leader
+        self.calculate_decrees()
